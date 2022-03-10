@@ -3,6 +3,7 @@ package gandi
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -79,15 +80,41 @@ func resourceLiveDNSRecordCreate(d *schema.ResourceData, meta interface{}) error
 	recordType := d.Get("type").(string)
 	ttl := d.Get("ttl").(int)
 	valuesList := d.Get("values").(*schema.Set).List()
+
 	var values []string
 	for _, v := range valuesList {
 		values = append(values, v.(string))
 	}
 	client := meta.(*clients).LiveDNS
-	_, err := client.CreateDomainRecord(zoneUUID, name, recordType, ttl, values)
-	if err != nil {
-		return err
+
+	// Retrieve existing records in case new record is of type TXT
+	if recordType == "TXT" {
+		rec, err := client.GetDomainRecordByNameAndType(zoneUUID, name, recordType)
+		if err != nil {
+			return err
+		}
+		// Add new values to existing ones
+		values = append(values, rec.RrsetValues...)
+
+		log.Printf("[INFO] *********************************")
+		log.Printf("[INFO] resource data: %+v", d)
+		log.Printf("[INFO] zone_id: %+v", zoneUUID)
+		log.Printf("[INFO] ttl: %v", ttl)
+		log.Printf("[INFO] record: %+v", rec)
+		log.Printf("[INFO] values: %v", values)
+		log.Printf("[INFO] *********************************")
+
+		_, err = client.UpdateDomainRecordByNameAndType(zoneUUID, name, recordType, ttl, values)
+		if err != nil {
+			return err
+		}
+	} else {
+		_, err := client.CreateDomainRecord(zoneUUID, name, recordType, ttl, values)
+		if err != nil {
+			return err
+		}
 	}
+
 	calculatedID := fmt.Sprintf("%s/%s/%s", zoneUUID, name, recordType)
 	d.SetId(calculatedID)
 	return resourceLiveDNSRecordRead(d, meta)
@@ -99,10 +126,19 @@ func resourceLiveDNSRecordRead(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return err
 	}
+
+	log.Printf("[INFO] ########################################")
+	log.Printf("[INFO] READ")
+	log.Printf("[INFO] data: %+v", d)
+	log.Printf("[INFO] %v %v %v", zone, name, recordType)
+	log.Printf("[INFO] VALUES: %+v", d.Get("values").(*schema.Set).List())
+	log.Printf("[INFO] ########################################")
+
 	record, err := client.GetDomainRecordByNameAndType(zone, name, recordType)
 	if err != nil {
 		return err
 	}
+
 	if err = d.Set("zone", zone); err != nil {
 		return fmt.Errorf("failed to set zone for %s: %w", d.Id(), err)
 	}
@@ -118,8 +154,16 @@ func resourceLiveDNSRecordRead(d *schema.ResourceData, meta interface{}) error {
 	if err = d.Set("href", record.RrsetHref); err != nil {
 		return fmt.Errorf("failed to set href for %s: %w", d.Id(), err)
 	}
-	if err = d.Set("values", record.RrsetValues); err != nil {
-		return fmt.Errorf("failed to set the values for %s: %w", d.Id(), err)
+
+	if recordType == "TXT" {
+		// Keep only values defined within terraform rather than list of all records
+		if err = d.Set("values", d.Get("values").(*schema.Set).List()); err != nil {
+			return fmt.Errorf("failed to set the values for %s: %w", d.Id(), err)
+		}
+	} else {
+		if err = d.Set("values", record.RrsetValues); err != nil {
+			return fmt.Errorf("failed to set the values for %s: %w", d.Id(), err)
+		}
 	}
 	return nil
 }
@@ -127,7 +171,6 @@ func resourceLiveDNSRecordRead(d *schema.ResourceData, meta interface{}) error {
 func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*clients).LiveDNS
 	zone, name, recordType, err := expandRecordID(d.Id())
-
 	if err != nil {
 		return err
 	}
@@ -135,9 +178,27 @@ func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error
 	ttl := d.Get("ttl").(int)
 	valuesList := d.Get("values").(*schema.Set).List()
 	var values []string
+
+	// Retrieve existing records in case new record is of type TXT
+	if recordType == "TXT" {
+		rec, err := client.GetDomainRecordByNameAndType(zone, name, recordType)
+		if err != nil {
+			return err
+		}
+		log.Printf("[INFO] *********************************")
+		log.Printf("[INFO] resource data: %+v", d)
+		log.Printf("[INFO] zone: %+v", zone)
+		log.Printf("[INFO] ttl: %v", ttl)
+		log.Printf("[INFO] record: %+v", rec)
+		log.Printf("[INFO] values before: %v", values)
+		log.Printf("[INFO] *********************************")
+		values = append(values, rec.RrsetValues...)
+	}
+
 	for _, v := range valuesList {
 		values = append(values, v.(string))
 	}
+
 	_, err = client.UpdateDomainRecordByNameAndType(zone, name, recordType, ttl, values)
 	if err != nil {
 		return err
