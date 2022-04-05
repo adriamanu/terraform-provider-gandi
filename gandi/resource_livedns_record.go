@@ -10,6 +10,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
+const TXT = "TXT"
+
 func resourceLiveDNSRecord() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceLiveDNSRecordCreate,
@@ -55,6 +57,11 @@ func resourceLiveDNSRecord() *schema.Resource {
 				Required:    true,
 				Description: "A list of values of the record",
 			},
+			"mutable": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Description: "Define if the record can be modified outside Terraform",
+			},
 		},
 		Timeouts: &schema.ResourceTimeout{Default: schema.DefaultTimeout(1 * time.Minute)},
 	}
@@ -64,7 +71,7 @@ func expandRecordID(id string) (zone, name, recordType string, err error) {
 	splitID := strings.Split(id, "/")
 
 	if len(splitID) != 3 {
-		err = errors.New("Id format should be '{zone_id}/{record_name}/{record_type}'")
+		err = errors.New("id format should be '{zone_id}/{record_name}/{record_type}'")
 		return
 	}
 
@@ -74,17 +81,38 @@ func expandRecordID(id string) (zone, name, recordType string, err error) {
 	return
 }
 
-func resourceLiveDNSRecordCreate(d *schema.ResourceData, meta interface{}) error {
-	zoneUUID := d.Get("zone").(string)
-	name := d.Get("name").(string)
-	recordType := d.Get("type").(string)
-	ttl := d.Get("ttl").(int)
-	valuesList := d.Get("values").(*schema.Set).List()
-	var values []string
-	for _, v := range valuesList {
-		values = append(values, v.(string))
+func keepUniqueRecords(recordsList []string) []string {
+	keys := make(map[string]bool)
+	uniqueRecords := []string{}
+	for _, entry := range recordsList {
+		if _, value := keys[entry]; !value {
+			keys[entry] = true
+			uniqueRecords = append(uniqueRecords, entry)
+		}
 	}
+	return uniqueRecords
+}
+
+func isRecordWrappedWithQuotes(record string) bool {
+	return strings.HasPrefix(record, "\"") && strings.HasSuffix(record, "\"")
+}
+
+func containsRecord(recordsList []string, recordToFind string) int {
+	for i, rec := range recordsList {
+		if rec == recordToFind {
+			return i
+		}
+	}
+	return -1
+}
+
+func removeRecordFromValuesList(records []string, index int) []string {
+	return append(records[:index], records[index+1:]...)
+}
+
+func createRecord(d *schema.ResourceData, meta interface{}, zoneUUID, name, recordType string, ttl int, values []string) error {
 	client := meta.(*clients).LiveDNS
+
 	_, err := client.CreateDomainRecord(zoneUUID, name, recordType, ttl, values)
 	if err != nil {
 		return err
@@ -94,9 +122,39 @@ func resourceLiveDNSRecordCreate(d *schema.ResourceData, meta interface{}) error
 	return resourceLiveDNSRecordRead(d, meta)
 }
 
+func resourceLiveDNSRecordCreate(d *schema.ResourceData, meta interface{}) error {
+	zoneUUID := d.Get("zone").(string)
+	name := d.Get("name").(string)
+	recordType := d.Get("type").(string)
+	ttl := d.Get("ttl").(int)
+	valuesList := d.Get("values").(*schema.Set).List()
+	mutable := d.Get("mutable").(bool)
+
+	var values []string
+	for _, v := range valuesList {
+		values = append(values, v.(string))
+	}
+	client := meta.(*clients).LiveDNS
+
+	// Retrieve existing records - create if not exists otherwise update records with new values
+	if recordType == TXT && mutable {
+		rec, err := client.GetDomainRecordByNameAndType(zoneUUID, name, recordType)
+		if err != nil {
+			return createRecord(d, meta, zoneUUID, name, recordType, ttl, values)
+		}
+		values = append(values, rec.RrsetValues...)
+		_, err = client.UpdateDomainRecordByNameAndType(zoneUUID, name, recordType, ttl, values)
+		if err != nil {
+			return err
+		}
+	}
+	return createRecord(d, meta, zoneUUID, name, recordType, ttl, values)
+}
+
 func resourceLiveDNSRecordRead(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*clients).LiveDNS
 	zone, name, recordType, err := expandRecordID(d.Id())
+	mutable := d.Get("mutable").(bool)
 	if err != nil {
 		return err
 	}
@@ -126,26 +184,53 @@ func resourceLiveDNSRecordRead(d *schema.ResourceData, meta interface{}) error {
 	if err = d.Set("href", record.RrsetHref); err != nil {
 		return fmt.Errorf("failed to set href for %s: %w", d.Id(), err)
 	}
-	if err = d.Set("values", record.RrsetValues); err != nil {
-		return fmt.Errorf("failed to set the values for %s: %w", d.Id(), err)
+	if recordType == TXT && mutable {
+		// Keep only values defined within terraform rather than list of all records
+		if err = d.Set("values", d.Get("values").(*schema.Set).List()); err != nil {
+			return fmt.Errorf("failed to set the values for %s: %w", d.Id(), err)
+		}
+	} else {
+		if err = d.Set("values", record.RrsetValues); err != nil {
+			return fmt.Errorf("failed to set the values for %s: %w", d.Id(), err)
+		}
 	}
+
 	return nil
 }
 
 func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*clients).LiveDNS
 	zone, name, recordType, err := expandRecordID(d.Id())
-
 	if err != nil {
 		return err
 	}
 
+	mutable := d.Get("mutable").(bool)
 	ttl := d.Get("ttl").(int)
 	valuesList := d.Get("values").(*schema.Set).List()
 	var values []string
 	for _, v := range valuesList {
 		values = append(values, v.(string))
 	}
+
+	if recordType == TXT && mutable {
+		rec, err := client.GetDomainRecordByNameAndType(zone, name, recordType)
+		if err != nil {
+			return err
+		}
+		var recordsWithQuotes []string
+		existingAndManagedRecords := append(values, rec.RrsetValues...)
+		for i := range existingAndManagedRecords {
+			record := fmt.Sprintf("%v", existingAndManagedRecords[i])
+			if isRecordWrappedWithQuotes(record) {
+				recordsWithQuotes = append(recordsWithQuotes, record)
+			} else {
+				recordsWithQuotes = append(recordsWithQuotes, "\""+record+"\"")
+			}
+		}
+		values = keepUniqueRecords(recordsWithQuotes)
+	}
+
 	_, err = client.UpdateDomainRecordByNameAndType(zone, name, recordType, ttl, values)
 	if err != nil {
 		return err
@@ -156,13 +241,46 @@ func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error
 func resourceLiveDNSRecordDelete(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*clients).LiveDNS
 	zone, name, recordType, err := expandRecordID(d.Id())
+	mutable := d.Get("mutable").(bool)
 
 	if err != nil {
 		return err
 	}
 
-	if err = client.DeleteDomainRecord(zone, name, recordType); err != nil {
-		return err
+	if recordType == TXT && mutable {
+		zoneUUID := d.Get("zone").(string)
+		valuesList := d.Get("values").(*schema.Set).List()
+		ttl := d.Get("ttl").(int)
+
+		rec, err := client.GetDomainRecordByNameAndType(zoneUUID, name, recordType)
+		if err != nil {
+			return err
+		}
+
+		// If the amount of records returned by the API is equal to amount of records handled by terraform
+		// It means that all resources are managed by Terraform and then records can be safely deleted
+		// Otherwise we need to remove terraform managed records from the records list and update it
+		if len(rec.RrsetValues) == len(valuesList) {
+			if err = client.DeleteDomainRecord(zone, name, recordType); err != nil {
+				return err
+			}
+		} else {
+			var values []string = rec.RrsetValues
+			for _, v := range valuesList {
+				index := containsRecord(values, "\""+v.(string)+"\"")
+				if index != -1 {
+					values = removeRecordFromValuesList(values, index)
+				}
+			}
+			_, err = client.UpdateDomainRecordByNameAndType(zoneUUID, name, recordType, ttl, values)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		if err = client.DeleteDomainRecord(zone, name, recordType); err != nil {
+			return err
+		}
 	}
 
 	d.SetId("")
