@@ -59,7 +59,7 @@ func resourceLiveDNSRecord() *schema.Resource {
 			"mutable": {
 				Type:        schema.TypeBool,
 				Optional:    true,
-				Description: "Is record mutable",
+				Description: "Define if the record can be modified outside Terraform",
 			},
 		},
 		Timeouts: &schema.ResourceTimeout{Default: schema.DefaultTimeout(1 * time.Minute)},
@@ -70,7 +70,7 @@ func expandRecordID(id string) (zone, name, recordType string, err error) {
 	splitID := strings.Split(id, "/")
 
 	if len(splitID) != 3 {
-		err = errors.New("Id format should be '{zone_id}/{record_name}/{record_type}'")
+		err = errors.New("id format should be '{zone_id}/{record_name}/{record_type}'")
 		return
 	}
 
@@ -78,6 +78,47 @@ func expandRecordID(id string) (zone, name, recordType string, err error) {
 	name = splitID[1]
 	recordType = splitID[2]
 	return
+}
+
+func keepUniqueRecords(recordsList []string) []string {
+	keys := make(map[string]bool)
+	uniqueRecords := []string{}
+	for _, entry := range recordsList {
+		if _, value := keys[entry]; !value {
+			keys[entry] = true
+			uniqueRecords = append(uniqueRecords, entry)
+		}
+	}
+	return uniqueRecords
+}
+
+func isRecordWrappedWithQuotes(record string) bool {
+	return strings.HasPrefix(record, "\"") && strings.HasSuffix(record, "\"")
+}
+
+func containsRecord(recordsList []string, recordToFind string) int {
+	for i, rec := range recordsList {
+		if rec == recordToFind {
+			return i
+		}
+	}
+	return -1
+}
+
+func removeRecordFromValuesList(records []string, index int) []string {
+	return append(records[:index], records[index+1:]...)
+}
+
+func createRecord(d *schema.ResourceData, meta interface{}, zoneUUID, name, recordType string, ttl int, values []string) error {
+	client := meta.(*clients).LiveDNS
+
+	_, err := client.CreateDomainRecord(zoneUUID, name, recordType, ttl, values)
+	if err != nil {
+		return err
+	}
+	calculatedID := fmt.Sprintf("%s/%s/%s", zoneUUID, name, recordType)
+	d.SetId(calculatedID)
+	return resourceLiveDNSRecordRead(d, meta)
 }
 
 func resourceLiveDNSRecordCreate(d *schema.ResourceData, meta interface{}) error {
@@ -94,35 +135,19 @@ func resourceLiveDNSRecordCreate(d *schema.ResourceData, meta interface{}) error
 	}
 	client := meta.(*clients).LiveDNS
 
-	// Retrieve existing records in case new record is of type TXT and if record is mutable
+	// Retrieve existing records - create if not exists otherwise update records with new values
 	if recordType == TXT && mutable {
 		rec, err := client.GetDomainRecordByNameAndType(zoneUUID, name, recordType)
 		if err != nil {
-			// if record doesn't exist create it
-			_, err := client.CreateDomainRecord(zoneUUID, name, recordType, ttl, values)
-			if err != nil {
-				return err
-			}
-			calculatedID := fmt.Sprintf("%s/%s/%s", zoneUUID, name, recordType)
-			d.SetId(calculatedID)
-			return resourceLiveDNSRecordRead(d, meta)
+			return createRecord(d, meta, zoneUUID, name, recordType, ttl, values)
 		}
-		// Add new values to existing ones and update record
 		values = append(values, rec.RrsetValues...)
 		_, err = client.UpdateDomainRecordByNameAndType(zoneUUID, name, recordType, ttl, values)
 		if err != nil {
 			return err
 		}
-	} else {
-		_, err := client.CreateDomainRecord(zoneUUID, name, recordType, ttl, values)
-		if err != nil {
-			return err
-		}
 	}
-
-	calculatedID := fmt.Sprintf("%s/%s/%s", zoneUUID, name, recordType)
-	d.SetId(calculatedID)
-	return resourceLiveDNSRecordRead(d, meta)
+	return createRecord(d, meta, zoneUUID, name, recordType, ttl, values)
 }
 
 func resourceLiveDNSRecordRead(d *schema.ResourceData, meta interface{}) error {
@@ -165,22 +190,6 @@ func resourceLiveDNSRecordRead(d *schema.ResourceData, meta interface{}) error {
 	return nil
 }
 
-func keepUniqueRecords(recordsList []string) []string {
-	keys := make(map[string]bool)
-	uniqueRecords := []string{}
-	for _, entry := range recordsList {
-		if _, value := keys[entry]; !value {
-			keys[entry] = true
-			uniqueRecords = append(uniqueRecords, entry)
-		}
-	}
-	return uniqueRecords
-}
-
-func IsWrappedWithQuotes(record string) bool {
-	return strings.HasPrefix(record, "\"") && strings.HasSuffix(record, "\"")
-}
-
 func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*clients).LiveDNS
 	zone, name, recordType, err := expandRecordID(d.Id())
@@ -201,18 +210,16 @@ func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error
 		if err != nil {
 			return err
 		}
-		// Add already existing values to list then remove duplicate
-		allRecords := append(values, rec.RrsetValues...)
 		var recordsWithQuotes []string
-		for i := range allRecords {
-			record := fmt.Sprintf("%v", allRecords[i])
-			if IsWrappedWithQuotes(record) {
+		existingAndManagedRecords := append(values, rec.RrsetValues...)
+		for i := range existingAndManagedRecords {
+			record := fmt.Sprintf("%v", existingAndManagedRecords[i])
+			if isRecordWrappedWithQuotes(record) {
 				recordsWithQuotes = append(recordsWithQuotes, record)
 			} else {
 				recordsWithQuotes = append(recordsWithQuotes, "\""+record+"\"")
 			}
 		}
-
 		values = keepUniqueRecords(recordsWithQuotes)
 	}
 
@@ -221,19 +228,6 @@ func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error
 		return err
 	}
 	return resourceLiveDNSRecordRead(d, meta)
-}
-
-func contains(recordsList []string, recordToFind string) int {
-	for i, rec := range recordsList {
-		if rec == recordToFind {
-			return i
-		}
-	}
-	return -1
-}
-
-func remove(slice []string, index int) []string {
-	return append(slice[:index], slice[index+1:]...)
 }
 
 func resourceLiveDNSRecordDelete(d *schema.ResourceData, meta interface{}) error {
@@ -245,7 +239,6 @@ func resourceLiveDNSRecordDelete(d *schema.ResourceData, meta interface{}) error
 		return err
 	}
 
-	// Retrieve existing records in case new record is of type TXT and if record is mutable
 	if recordType == TXT && mutable {
 		zoneUUID := d.Get("zone").(string)
 		valuesList := d.Get("values").(*schema.Set).List()
@@ -256,21 +249,19 @@ func resourceLiveDNSRecordDelete(d *schema.ResourceData, meta interface{}) error
 			return err
 		}
 
-		// If we have same amount of records from the API and in terraform
-		// It means that all resources are managed by Terraform
-		// Then we can safely delete records
+		// If the amount of records returned by the API is equal to amount of records handled by terraform
+		// It means that all resources are managed by Terraform and then records can be safely deleted
+		// Otherwise we need to remove terraform managed records from the records list and update it
 		if len(rec.RrsetValues) == len(valuesList) {
 			if err = client.DeleteDomainRecord(zone, name, recordType); err != nil {
 				return err
 			}
 		} else {
-			// Otherwise we need to remove terraform managed records from the records list and update it
 			var values []string = rec.RrsetValues
 			for _, v := range valuesList {
-				// Wrap value with quotes to match api
-				index := contains(values, "\""+v.(string)+"\"")
+				index := containsRecord(values, "\""+v.(string)+"\"")
 				if index != -1 {
-					values = remove(values, index)
+					values = removeRecordFromValuesList(values, index)
 				}
 			}
 			_, err = client.UpdateDomainRecordByNameAndType(zoneUUID, name, recordType, ttl, values)

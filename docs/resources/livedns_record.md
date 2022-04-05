@@ -25,8 +25,9 @@ description: |-
 
 ### Optional
 
-- **id** (String) The ID of this resource.
+- **id** (String) The ID of this resource
 - **timeouts** (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
+- **mutable** (Boolean) Allow manipulation of TXT records that already exists / lives outside of Terraform
 
 ### Read-Only
 
