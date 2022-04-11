@@ -85,7 +85,7 @@ func keepUniqueRecords(recordsList []string) []string {
 	keys := make(map[string]bool)
 	uniqueRecords := []string{}
 	for _, entry := range recordsList {
-		if _, value := keys[entry]; !value {
+		if _, exists := keys[entry]; !exists {
 			keys[entry] = true
 			uniqueRecords = append(uniqueRecords, entry)
 		}
@@ -97,13 +97,13 @@ func isRecordWrappedWithQuotes(record string) bool {
 	return strings.HasPrefix(record, "\"") && strings.HasSuffix(record, "\"")
 }
 
-func containsRecord(recordsList []string, recordToFind string) int {
+func containsRecord(recordsList []string, recordToFind string) (int, bool) {
 	for i, rec := range recordsList {
 		if rec == recordToFind {
-			return i
+			return i, true
 		}
 	}
-	return -1
+	return 0, false
 }
 
 func removeRecordFromValuesList(records []string, index int) []string {
@@ -267,8 +267,8 @@ func resourceLiveDNSRecordDelete(d *schema.ResourceData, meta interface{}) error
 		} else {
 			var values []string = rec.RrsetValues
 			for _, v := range valuesList {
-				index := containsRecord(values, "\""+v.(string)+"\"")
-				if index != -1 {
+				index, exists := containsRecord(values, "\""+v.(string)+"\"")
+				if exists {
 					values = removeRecordFromValuesList(values, index)
 				}
 			}
