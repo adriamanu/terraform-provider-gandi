@@ -17,27 +17,27 @@ description: |-
 
 ### Required
 
-- **name** (String) The name of the record
-- **ttl** (Number) The TTL of the record
-- **type** (String) The type of the record
-- **values** (Set of String) A list of values of the record
-- **zone** (String) The FQDN of the domain
+- `name` (String) The name of the record
+- `ttl` (Number) The TTL of the record
+- `type` (String) The type of the record
+- `values` (Set of String) A list of values of the record
+- `zone` (String) The FQDN of the domain
 
 ### Optional
 
-- **id** (String) The ID of this resource
-- **timeouts** (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
-- **mutable** (Boolean) Allow manipulation of TXT records that already exists / lives outside of Terraform
+- `id` (String) The ID of this resource.
+- `mutable` (Boolean) Define if the record can be modified outside Terraform
+- `timeouts` (Block, Optional) (see [below for nested schema](#nestedblock--timeouts))
 
 ### Read-Only
 
-- **href** (String) The href of the record
+- `href` (String) The href of the record
 
 <a id="nestedblock--timeouts"></a>
 ### Nested Schema for `timeouts`
 
 Optional:
 
-- **default** (String)
+- `default` (String)
 
 
