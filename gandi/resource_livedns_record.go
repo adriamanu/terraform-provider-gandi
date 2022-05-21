@@ -198,6 +198,19 @@ func resourceLiveDNSRecordRead(d *schema.ResourceData, meta interface{}) error {
 	return nil
 }
 
+func wrapRecordsWithQuotes(records []string) []string {
+	var recordsWithQuotes []string
+	for i := range records {
+		record := fmt.Sprintf("%v", records[i])
+		if isRecordWrappedWithQuotes(record) {
+			recordsWithQuotes = append(recordsWithQuotes, record)
+		} else {
+			recordsWithQuotes = append(recordsWithQuotes, "\""+record+"\"")
+		}
+	}
+	return recordsWithQuotes
+}
+
 func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*clients).LiveDNS
 	zone, name, recordType, err := expandRecordID(d.Id())
@@ -218,16 +231,8 @@ func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error
 		if err != nil {
 			return err
 		}
-		var recordsWithQuotes []string
-		existingAndManagedRecords := append(values, rec.RrsetValues...)
-		for i := range existingAndManagedRecords {
-			record := fmt.Sprintf("%v", existingAndManagedRecords[i])
-			if isRecordWrappedWithQuotes(record) {
-				recordsWithQuotes = append(recordsWithQuotes, record)
-			} else {
-				recordsWithQuotes = append(recordsWithQuotes, "\""+record+"\"")
-			}
-		}
+		records := append(values, rec.RrsetValues...)
+		recordsWithQuotes := wrapRecordsWithQuotes(records)
 		values = keepUniqueRecords(recordsWithQuotes)
 	}
 
@@ -236,6 +241,18 @@ func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error
 		return err
 	}
 	return resourceLiveDNSRecordRead(d, meta)
+}
+
+func areStringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, v := range a {
+		if v != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func resourceLiveDNSRecordDelete(d *schema.ResourceData, meta interface{}) error {
@@ -257,17 +274,23 @@ func resourceLiveDNSRecordDelete(d *schema.ResourceData, meta interface{}) error
 			return err
 		}
 
-		// If the amount of records returned by the API is equal to amount of records handled by terraform
-		// It means that all resources are managed by Terraform and then records can be safely deleted
+		var values []string
+		for _, v := range valuesList {
+			values = append(values, v.(string))
+		}
+		apiValuesWrappedWithQuotes := wrapRecordsWithQuotes(rec.RrsetValues)
+		valuesListWrappedWithQuotes := wrapRecordsWithQuotes(values)
+
+		// If Terraform and api return the same records list then we can safely remove records
 		// Otherwise we need to remove terraform managed records from the records list and update it
-		if len(rec.RrsetValues) == len(valuesList) {
+		if areStringSlicesEqual(apiValuesWrappedWithQuotes, valuesListWrappedWithQuotes) {
 			if err = client.DeleteDomainRecord(zone, name, recordType); err != nil {
 				return err
 			}
 		} else {
-			var values []string = rec.RrsetValues
-			for _, v := range valuesList {
-				index, exists := containsRecord(values, "\""+v.(string)+"\"")
+			var values []string = apiValuesWrappedWithQuotes
+			for _, v := range valuesListWrappedWithQuotes {
+				index, exists := containsRecord(values, v)
 				if exists {
 					values = removeRecordFromValuesList(values, index)
 				}

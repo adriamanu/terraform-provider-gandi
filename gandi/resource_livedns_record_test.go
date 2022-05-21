@@ -120,6 +120,17 @@ func TestIfRecordIfWrappedWithQuote(t *testing.T) {
 	})
 }
 
+func TestWrappingRecordsWithQuotes(t *testing.T) {
+	t.Run("wrapped with quotes", func(t *testing.T) {
+		records := []string{"\"192.168.0.1\"", "192.168.0.2", "192.168.0.3", "\"192.168.0.1\""}
+		wrappedRecords := wrapRecordsWithQuotes(records)
+		awaitedResult := []string{"\"192.168.0.1\"", "\"192.168.0.2\"", "\"192.168.0.3\"", "\"192.168.0.1\""}
+		if !areStringSlicesEqual(wrappedRecords, awaitedResult) {
+			t.Errorf("%s records are not wrapped with quotes.", wrappedRecords)
+		}
+	})
+}
+
 func TestIfRecordsListContainsRecord(t *testing.T) {
 	recordToCheck := "10.10.0.0"
 	t.Run("contains record at first index", func(t *testing.T) {
