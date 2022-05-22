@@ -2,7 +2,6 @@ package gandi
 
 import (
 	"os"
-	"reflect"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/logging"
@@ -151,20 +150,46 @@ func TestIfRecordsListContainsRecord(t *testing.T) {
 }
 
 func TestRemoveRecordFromValuesList(t *testing.T) {
-	recordsList := []string{"192.168.1.1", "10.10.10.10", "0.0.0.0"}
 	t.Run("remove record at first index", func(t *testing.T) {
+		recordsList := []string{"192.168.1.1", "10.10.10.10", "0.0.0.0"}
 		shortenedList := removeRecordFromValuesList(recordsList, 0)
 		awaitedList := []string{"10.10.10.10", "0.0.0.0"}
-		if !reflect.DeepEqual(shortenedList, awaitedList) {
+		if !areStringSlicesEqual(shortenedList, awaitedList) {
 			t.Errorf("shortenedList should only contains 2 elements")
 		}
 	})
 
 	t.Run("remove record at third index", func(t *testing.T) {
+		recordsList := []string{"192.168.1.1", "10.10.10.10", "0.0.0.0"}
 		shortenedList := removeRecordFromValuesList(recordsList, 2)
 		awaitedList := []string{"192.168.1.1", "10.10.10.10"}
-		if !reflect.DeepEqual(shortenedList, awaitedList) {
+		if !areStringSlicesEqual(shortenedList, awaitedList) {
 			t.Errorf("shortenedList should only contains 2 elements")
+		}
+	})
+}
+
+func TestGetUpdatedTXTRecordsList(t *testing.T) {
+	currentStateRecords := []string{"192.168.1.1", "192.168.1.2", "192.168.1.3"}
+	managedByHandRecords := []string{"10.10.10.10", "0.0.0.0"}
+	// Same records than terraform + few records added by hand outside terraform
+	apiRecords := append(managedByHandRecords, currentStateRecords...)
+
+	t.Run("remove records in terraform", func(t *testing.T) {
+		nextStateRecords := []string{"192.168.1.1"}
+		updatedRecordsList := getUpdatedTXTRecordsList(currentStateRecords, apiRecords, nextStateRecords)
+		awaitedRecordsList := wrapRecordsWithQuotes(append(managedByHandRecords, nextStateRecords...))
+		if !areStringSlicesEqual(updatedRecordsList, awaitedRecordsList) {
+			t.Errorf("records list should only contains records managed by hand and new terraform records")
+		}
+	})
+
+	t.Run("add records in terraform", func(t *testing.T) {
+		nextStateRecords := append(currentStateRecords, "192.168.1.4")
+		updatedRecordsList := getUpdatedTXTRecordsList(currentStateRecords, apiRecords, nextStateRecords)
+		awaitedRecordsList := wrapRecordsWithQuotes(append(managedByHandRecords, nextStateRecords...))
+		if !areStringSlicesEqual(updatedRecordsList, awaitedRecordsList) {
+			t.Errorf("records list should only contains records managed by hand and new terraform records")
 		}
 	})
 }

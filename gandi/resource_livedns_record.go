@@ -81,35 +81,6 @@ func expandRecordID(id string) (zone, name, recordType string, err error) {
 	return
 }
 
-func keepUniqueRecords(recordsList []string) []string {
-	keys := make(map[string]bool)
-	uniqueRecords := []string{}
-	for _, entry := range recordsList {
-		if _, exists := keys[entry]; !exists {
-			keys[entry] = true
-			uniqueRecords = append(uniqueRecords, entry)
-		}
-	}
-	return uniqueRecords
-}
-
-func isRecordWrappedWithQuotes(record string) bool {
-	return strings.HasPrefix(record, "\"") && strings.HasSuffix(record, "\"")
-}
-
-func containsRecord(recordsList []string, recordToFind string) (int, bool) {
-	for i, rec := range recordsList {
-		if rec == recordToFind {
-			return i, true
-		}
-	}
-	return 0, false
-}
-
-func removeRecordFromValuesList(records []string, index int) []string {
-	return append(records[:index], records[index+1:]...)
-}
-
 func createRecord(d *schema.ResourceData, meta interface{}, zoneUUID, name, recordType string, ttl int, values []string) error {
 	client := meta.(*clients).LiveDNS
 
@@ -158,8 +129,8 @@ func resourceLiveDNSRecordRead(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return err
 	}
-	record, err := client.GetDomainRecordByNameAndType(zone, name, recordType)
 
+	record, err := client.GetDomainRecordByNameAndType(zone, name, recordType)
 	if err != nil {
 		requestError, ok := err.(*types.RequestError)
 		if ok && requestError.StatusCode == 404 {
@@ -198,19 +169,6 @@ func resourceLiveDNSRecordRead(d *schema.ResourceData, meta interface{}) error {
 	return nil
 }
 
-func wrapRecordsWithQuotes(records []string) []string {
-	var recordsWithQuotes []string
-	for i := range records {
-		record := fmt.Sprintf("%v", records[i])
-		if isRecordWrappedWithQuotes(record) {
-			recordsWithQuotes = append(recordsWithQuotes, record)
-		} else {
-			recordsWithQuotes = append(recordsWithQuotes, "\""+record+"\"")
-		}
-	}
-	return recordsWithQuotes
-}
-
 func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*clients).LiveDNS
 	zone, name, recordType, err := expandRecordID(d.Id())
@@ -231,9 +189,16 @@ func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error
 		if err != nil {
 			return err
 		}
-		records := append(values, rec.RrsetValues...)
-		recordsWithQuotes := wrapRecordsWithQuotes(records)
-		values = keepUniqueRecords(recordsWithQuotes)
+
+		// get current state records
+		stateRecords, _ := d.GetChange("values")
+		var currentRecords []string
+		for _, v := range stateRecords.(*schema.Set).List() {
+			currentRecords = append(currentRecords, v.(string))
+		}
+		// remove current state records from the api records list
+		// then add new records to the list -> that way we do a clean update
+		values = getUpdatedTXTRecordsList(currentRecords, rec.RrsetValues, values)
 	}
 
 	_, err = client.UpdateDomainRecordByNameAndType(zone, name, recordType, ttl, values)
@@ -241,18 +206,6 @@ func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error
 		return err
 	}
 	return resourceLiveDNSRecordRead(d, meta)
-}
-
-func areStringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i, v := range a {
-		if v != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func resourceLiveDNSRecordDelete(d *schema.ResourceData, meta interface{}) error {
