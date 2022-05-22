@@ -156,8 +156,15 @@ func resourceLiveDNSRecordRead(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to set href for %s: %w", d.Id(), err)
 	}
 	if recordType == TXT && mutable {
-		// Keep only values defined within terraform rather than list of all records
-		if err = d.Set("values", d.Get("values").(*schema.Set).List()); err != nil {
+		// Keep only values that are both in terraform and in the api
+		valuesList := d.Get("values").(*schema.Set).List()
+		var tfValues []string
+		for _, v := range valuesList {
+			tfValues = append(tfValues, v.(string))
+		}
+
+		values := keepRecordsInApiAndTF(tfValues, record.RrsetValues)
+		if err = d.Set("values", values); err != nil {
 			return fmt.Errorf("failed to set the values for %s: %w", d.Id(), err)
 		}
 	} else {

@@ -192,3 +192,19 @@ func TestGetUpdatedTXTRecordsList(t *testing.T) {
 		}
 	})
 }
+
+func TestKeepRecordsInApiAndTF(t *testing.T) {
+	terraformRecords := []string{"192.168.1.1", "192.168.1.2", "192.168.1.3"}
+	managedByHandRecords := []string{"10.10.10.10", "0.0.0.0"}
+	apiRecords := append(terraformRecords, managedByHandRecords...)
+	apiRecordsWithQuotes := wrapRecordsWithQuotes(apiRecords)
+
+	t.Run("remove terraform record by hand", func(t *testing.T) {
+		awaitedRecords := terraformRecords[1:]
+		// api returns records wrapped with quotes
+		recordsInBoth := keepRecordsInApiAndTF(terraformRecords, apiRecordsWithQuotes[1:])
+		if !areStringSlicesEqual(recordsInBoth, awaitedRecords) {
+			t.Errorf("should only contains values that are both in api and terraform")
+		}
+	})
+}

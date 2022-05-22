@@ -27,6 +27,27 @@ func keepUniqueRecords(recordsList []string) []string {
 	return uniqueRecords
 }
 
+func keepRecordsInApiAndTF(tfValues []string, apiValues []string) []string {
+	var apiRecordsWithoutQuotes []string
+	for _, v := range apiValues {
+		if isRecordWrappedWithQuotes(v) {
+			apiRecordsWithoutQuotes = append(apiRecordsWithoutQuotes, strings.Trim(v, "\""))
+		} else {
+			apiRecordsWithoutQuotes = append(apiRecordsWithoutQuotes, v)
+		}
+	}
+
+	var values []string
+	for _, tfv := range tfValues {
+		for _, apiv := range apiRecordsWithoutQuotes {
+			if tfv == apiv {
+				values = append(values, apiv)
+			}
+		}
+	}
+	return values
+}
+
 func containsRecord(recordsList []string, recordToFind string) (int, bool) {
 	for i, rec := range recordsList {
 		if rec == recordToFind {
