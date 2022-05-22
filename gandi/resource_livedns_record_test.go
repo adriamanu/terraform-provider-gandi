@@ -89,32 +89,32 @@ func TestKeepUniqueRecords(t *testing.T) {
 	})
 }
 
-func TestIfRecordIfWrappedWithQuote(t *testing.T) {
+func TestIfRecordISWrappedWithQuotes(t *testing.T) {
 	t.Run("wrapped with quotes", func(t *testing.T) {
 		wrappedRecord := "\"192.168.0.1\""
 		if !isRecordWrappedWithQuotes(wrappedRecord) {
-			t.Errorf("%s records is wrapped with quotes.", wrappedRecord)
+			t.Errorf("%s record is wrapped with quotes.", wrappedRecord)
 		}
 	})
 
 	t.Run("suffix quote", func(t *testing.T) {
 		wrappedRecord := "192.168.0.1\""
 		if isRecordWrappedWithQuotes(wrappedRecord) {
-			t.Errorf("%s records is not wrapped with quotes.", wrappedRecord)
+			t.Errorf("%s record is not wrapped with quotes.", wrappedRecord)
 		}
 	})
 
 	t.Run("prefix quote", func(t *testing.T) {
 		wrappedRecord := "\"192.168.0.1"
 		if isRecordWrappedWithQuotes(wrappedRecord) {
-			t.Errorf("%s records is not wrapped with quotes.", wrappedRecord)
+			t.Errorf("%s record is not wrapped with quotes.", wrappedRecord)
 		}
 	})
 
 	t.Run("no quotes", func(t *testing.T) {
 		wrappedRecord := "192.168.0.1"
 		if isRecordWrappedWithQuotes(wrappedRecord) {
-			t.Errorf("%s records is not wrapped with quotes.", wrappedRecord)
+			t.Errorf("%s record is not wrapped with quotes.", wrappedRecord)
 		}
 	})
 }
@@ -172,7 +172,6 @@ func TestRemoveRecordFromValuesList(t *testing.T) {
 func TestGetUpdatedTXTRecordsList(t *testing.T) {
 	currentStateRecords := []string{"192.168.1.1", "192.168.1.2", "192.168.1.3"}
 	managedByHandRecords := []string{"10.10.10.10", "0.0.0.0"}
-	// Same records than terraform + few records added by hand outside terraform
 	apiRecords := append(managedByHandRecords, currentStateRecords...)
 
 	t.Run("remove records in terraform", func(t *testing.T) {

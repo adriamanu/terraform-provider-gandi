@@ -107,7 +107,7 @@ func resourceLiveDNSRecordCreate(d *schema.ResourceData, meta interface{}) error
 	}
 	client := meta.(*clients).LiveDNS
 
-	// Retrieve existing records - create if not exists otherwise update records with new values
+	// retrieve existing records - create if not exists otherwise update records with new values
 	if recordType == TXT && mutable {
 		rec, err := client.GetDomainRecordByNameAndType(zoneUUID, name, recordType)
 		if err != nil {
@@ -196,8 +196,7 @@ func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error
 		for _, v := range stateRecords.(*schema.Set).List() {
 			currentRecords = append(currentRecords, v.(string))
 		}
-		// remove current state records from the api records list
-		// then add new records to the list -> that way we do a clean update
+		// clean update by removing current state records from the api records list then add new records to the list
 		values = getUpdatedTXTRecordsList(currentRecords, rec.RrsetValues, values)
 	}
 
@@ -234,8 +233,8 @@ func resourceLiveDNSRecordDelete(d *schema.ResourceData, meta interface{}) error
 		apiValuesWrappedWithQuotes := wrapRecordsWithQuotes(rec.RrsetValues)
 		valuesListWrappedWithQuotes := wrapRecordsWithQuotes(values)
 
-		// If Terraform and api return the same records list then we can safely remove records
-		// Otherwise we need to remove terraform managed records from the records list and update it
+		// if terraform and api return the same records list then we can safely remove records
+		// otherwise we need to remove terraform managed records from the records list and update it
 		if areStringSlicesEqual(apiValuesWrappedWithQuotes, valuesListWrappedWithQuotes) {
 			if err = client.DeleteDomainRecord(zone, name, recordType); err != nil {
 				return err
