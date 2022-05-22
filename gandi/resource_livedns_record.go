@@ -81,35 +81,6 @@ func expandRecordID(id string) (zone, name, recordType string, err error) {
 	return
 }
 
-func keepUniqueRecords(recordsList []string) []string {
-	keys := make(map[string]bool)
-	uniqueRecords := []string{}
-	for _, entry := range recordsList {
-		if _, exists := keys[entry]; !exists {
-			keys[entry] = true
-			uniqueRecords = append(uniqueRecords, entry)
-		}
-	}
-	return uniqueRecords
-}
-
-func isRecordWrappedWithQuotes(record string) bool {
-	return strings.HasPrefix(record, "\"") && strings.HasSuffix(record, "\"")
-}
-
-func containsRecord(recordsList []string, recordToFind string) (int, bool) {
-	for i, rec := range recordsList {
-		if rec == recordToFind {
-			return i, true
-		}
-	}
-	return 0, false
-}
-
-func removeRecordFromValuesList(records []string, index int) []string {
-	return append(records[:index], records[index+1:]...)
-}
-
 func createRecord(d *schema.ResourceData, meta interface{}, zoneUUID, name, recordType string, ttl int, values []string) error {
 	client := meta.(*clients).LiveDNS
 
@@ -136,7 +107,7 @@ func resourceLiveDNSRecordCreate(d *schema.ResourceData, meta interface{}) error
 	}
 	client := meta.(*clients).LiveDNS
 
-	// Retrieve existing records - create if not exists otherwise update records with new values
+	// retrieve existing records - create if not exists otherwise update records with new values
 	if recordType == TXT && mutable {
 		rec, err := client.GetDomainRecordByNameAndType(zoneUUID, name, recordType)
 		if err != nil {
@@ -158,8 +129,8 @@ func resourceLiveDNSRecordRead(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return err
 	}
-	record, err := client.GetDomainRecordByNameAndType(zone, name, recordType)
 
+	record, err := client.GetDomainRecordByNameAndType(zone, name, recordType)
 	if err != nil {
 		requestError, ok := err.(*types.RequestError)
 		if ok && requestError.StatusCode == 404 {
@@ -218,17 +189,15 @@ func resourceLiveDNSRecordUpdate(d *schema.ResourceData, meta interface{}) error
 		if err != nil {
 			return err
 		}
-		var recordsWithQuotes []string
-		existingAndManagedRecords := append(values, rec.RrsetValues...)
-		for i := range existingAndManagedRecords {
-			record := fmt.Sprintf("%v", existingAndManagedRecords[i])
-			if isRecordWrappedWithQuotes(record) {
-				recordsWithQuotes = append(recordsWithQuotes, record)
-			} else {
-				recordsWithQuotes = append(recordsWithQuotes, "\""+record+"\"")
-			}
+
+		// get current state records
+		stateRecords, _ := d.GetChange("values")
+		var currentRecords []string
+		for _, v := range stateRecords.(*schema.Set).List() {
+			currentRecords = append(currentRecords, v.(string))
 		}
-		values = keepUniqueRecords(recordsWithQuotes)
+		// clean update by removing current state records from the api records list then add new records to the list
+		values = getUpdatedTXTRecordsList(currentRecords, rec.RrsetValues, values)
 	}
 
 	_, err = client.UpdateDomainRecordByNameAndType(zone, name, recordType, ttl, values)
@@ -257,17 +226,23 @@ func resourceLiveDNSRecordDelete(d *schema.ResourceData, meta interface{}) error
 			return err
 		}
 
-		// If the amount of records returned by the API is equal to amount of records handled by terraform
-		// It means that all resources are managed by Terraform and then records can be safely deleted
-		// Otherwise we need to remove terraform managed records from the records list and update it
-		if len(rec.RrsetValues) == len(valuesList) {
+		var values []string
+		for _, v := range valuesList {
+			values = append(values, v.(string))
+		}
+		apiValuesWrappedWithQuotes := wrapRecordsWithQuotes(rec.RrsetValues)
+		valuesListWrappedWithQuotes := wrapRecordsWithQuotes(values)
+
+		// if terraform and api return the same records list then we can safely remove records
+		// otherwise we need to remove terraform managed records from the records list and update it
+		if areStringSlicesEqual(apiValuesWrappedWithQuotes, valuesListWrappedWithQuotes) {
 			if err = client.DeleteDomainRecord(zone, name, recordType); err != nil {
 				return err
 			}
 		} else {
-			var values []string = rec.RrsetValues
-			for _, v := range valuesList {
-				index, exists := containsRecord(values, "\""+v.(string)+"\"")
+			var values []string = apiValuesWrappedWithQuotes
+			for _, v := range valuesListWrappedWithQuotes {
+				index, exists := containsRecord(values, v)
 				if exists {
 					values = removeRecordFromValuesList(values, index)
 				}
